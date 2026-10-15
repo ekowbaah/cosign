@@ -43,6 +43,7 @@ import (
 	"github.com/sigstore/cosign/v3/cmd/cosign/cli/options"
 	"github.com/sigstore/cosign/v3/internal/pkg/cosign/tsa/mock"
 	"github.com/sigstore/cosign/v3/internal/test"
+	"github.com/sigstore/cosign/v3/pkg/blob"
 	"github.com/sigstore/cosign/v3/pkg/cosign"
 	"github.com/sigstore/cosign/v3/pkg/cosign/bundle"
 	sigs "github.com/sigstore/cosign/v3/pkg/signature"
@@ -125,6 +126,19 @@ func TestSignaturesBundle(t *testing.T) {
 	}
 	if gotSig != b64sig {
 		t.Fatalf("unexpected signature, expected: %s got: %s", b64sig, gotSig)
+	}
+}
+
+func TestSignaturesRefRejectsOversizedFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "oversized.sig")
+	if err := os.WriteFile(path, bytes.Repeat([]byte{'a'}, maxVerificationMaterialBytes+1), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := base64signature(path, "")
+	var tooLarge *blob.InputTooLargeError
+	if !errors.As(err, &tooLarge) {
+		t.Fatalf("expected InputTooLargeError, got %v", err)
 	}
 }
 

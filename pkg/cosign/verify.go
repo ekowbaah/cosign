@@ -79,6 +79,8 @@ import (
 	"google.golang.org/protobuf/encoding/protojson"
 )
 
+const maxSignatureInputBytes = 4 << 20
+
 // Identity specifies an issuer/subject to verify a signature against.
 // Both IssuerRegExp/SubjectRegExp support regexp while Issuer/Subject are for
 // strict matching.
@@ -1013,7 +1015,7 @@ func VerifyImageSignature(ctx context.Context, sig oci.Signature, h v1.Hash, co 
 
 func loadSignatureFromFile(ctx context.Context, sigRef string, signedImgRef name.Reference, co *CheckOpts) (oci.Signatures, error) {
 	var b64sig string
-	targetSig, err := blob.LoadFileOrURL(sigRef)
+	targetSig, err := blob.LoadFileOrURLWithLimit(sigRef, maxSignatureInputBytes)
 	if err != nil {
 		if !errors.Is(err, fs.ErrNotExist) {
 			return nil, err

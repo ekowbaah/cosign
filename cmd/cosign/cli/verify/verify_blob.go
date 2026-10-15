@@ -43,6 +43,8 @@ import (
 	"github.com/sigstore/sigstore/pkg/cryptoutils"
 )
 
+const maxVerificationMaterialBytes = 4 << 20
+
 func isb64(data []byte) bool {
 	_, err := base64.StdEncoding.DecodeString(string(data))
 	return err == nil
@@ -214,7 +216,7 @@ func (c *VerifyBlobCmd) Exec(ctx context.Context, blobRef string) error {
 	}
 	if c.RFC3161TimestampPath != "" {
 		var rfc3161Timestamp bundle.RFC3161Timestamp
-		ts, err := blob.LoadFileOrURL(c.RFC3161TimestampPath)
+		ts, err := blob.LoadFileOrURLWithLimit(c.RFC3161TimestampPath, maxVerificationMaterialBytes)
 		if err != nil {
 			return err
 		}
@@ -292,7 +294,7 @@ func base64signature(sigRef, bundlePath string) (string, error) {
 	var err error
 	switch {
 	case sigRef != "":
-		targetSig, err = blob.LoadFileOrURL(sigRef)
+		targetSig, err = blob.LoadFileOrURLWithLimit(sigRef, maxVerificationMaterialBytes)
 		if err != nil {
 			if !errors.Is(err, fs.ErrNotExist) {
 				// ignore if file does not exist, it can be a base64 encoded string as well

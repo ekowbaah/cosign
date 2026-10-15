@@ -31,11 +31,37 @@ type UnrecognizedSchemeError struct {
 	Scheme string
 }
 
+// InputTooLargeError reports that externally supplied verification material
+// exceeded the caller's limit. Limiting reads is particularly important for
+// URL inputs, where the remote server may omit or misstate Content-Length.
+type InputTooLargeError struct {
+	Reference string
+	Limit     int64
+}
+
+func (e *InputTooLargeError) Error() string {
+	return fmt.Sprintf("loading %s: input exceeds %d bytes", e.Reference, e.Limit)
+}
+
 func (e *UnrecognizedSchemeError) Error() string {
 	return fmt.Sprintf("loading URL: unrecognized scheme: %s", e.Scheme)
 }
 
 func LoadFileOrURL(fileRef string) ([]byte, error) {
+	return loadFileOrURL(fileRef, 0)
+}
+
+// LoadFileOrURLWithLimit loads a file, URL, or environment variable while
+// refusing inputs larger than maxBytes. A non-positive limit is rejected so a
+// security-sensitive caller cannot accidentally disable the bound.
+func LoadFileOrURLWithLimit(fileRef string, maxBytes int64) ([]byte, error) {
+	if maxBytes <= 0 {
+		return nil, fmt.Errorf("loading %s: maximum size must be positive", fileRef)
+	}
+	return loadFileOrURL(fileRef, maxBytes)
+}
+
+func loadFileOrURL(fileRef string, maxBytes int64) ([]byte, error) {
 	var raw []byte
 	var err error
 	parts := strings.SplitAfterN(fileRef, "://", 2)
@@ -54,7 +80,10 @@ func LoadFileOrURL(fileRef string) ([]byte, error) {
 			if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 				return nil, fmt.Errorf("loading URL %s: server returned HTTP %d", fileRef, resp.StatusCode)
 			}
-			raw, err = io.ReadAll(resp.Body)
+			if maxBytes > 0 && resp.ContentLength > maxBytes {
+				return nil, &InputTooLargeError{Reference: fileRef, Limit: maxBytes}
+			}
+			raw, err = readAll(resp.Body, fileRef, maxBytes)
 			if err != nil {
 				return nil, err
 			}
@@ -68,14 +97,41 @@ func LoadFileOrURL(fileRef string) ([]byte, error) {
 				return nil, fmt.Errorf("loading URL: env var $%s not found", envVar)
 			}
 			raw = []byte(value)
+			if maxBytes > 0 && int64(len(raw)) > maxBytes {
+				return nil, &InputTooLargeError{Reference: fileRef, Limit: maxBytes}
+			}
 		default:
 			return nil, &UnrecognizedSchemeError{Scheme: scheme}
 		}
 	} else {
-		raw, err = os.ReadFile(filepath.Clean(fileRef))
+		path := filepath.Clean(fileRef)
+		if maxBytes > 0 {
+			file, openErr := os.Open(path)
+			if openErr != nil {
+				return nil, openErr
+			}
+			defer file.Close()
+			raw, err = readAll(file, fileRef, maxBytes)
+		} else {
+			raw, err = os.ReadFile(path)
+		}
 		if err != nil {
 			return nil, err
 		}
+	}
+	return raw, nil
+}
+
+func readAll(reader io.Reader, reference string, maxBytes int64) ([]byte, error) {
+	if maxBytes <= 0 {
+		return io.ReadAll(reader)
+	}
+	raw, err := io.ReadAll(io.LimitReader(reader, maxBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(raw)) > maxBytes {
+		return nil, &InputTooLargeError{Reference: reference, Limit: maxBytes}
 	}
 	return raw, nil
 }

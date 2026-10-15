@@ -17,6 +17,7 @@ package blob
 
 import (
 	"bytes"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -25,6 +26,63 @@ import (
 	"strings"
 	"testing"
 )
+
+func TestLoadFileOrURLWithLimit(t *testing.T) {
+	tests := []struct {
+		name      string
+		reference func(t *testing.T, payload []byte) string
+	}{
+		{
+			name: "file",
+			reference: func(t *testing.T, payload []byte) string {
+				path := path.Join(t.TempDir(), "input")
+				if err := os.WriteFile(path, payload, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				return path
+			},
+		},
+		{
+			name: "environment",
+			reference: func(t *testing.T, payload []byte) string {
+				t.Setenv("COSIGN_TEST_BOUNDED_INPUT", string(payload))
+				return "env://COSIGN_TEST_BOUNDED_INPUT"
+			},
+		},
+		{
+			name: "url without content length",
+			reference: func(t *testing.T, payload []byte) string {
+				server := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, _ *http.Request) {
+					rw.Header().Set("Content-Length", "-1")
+					_, _ = rw.Write(payload)
+				}))
+				t.Cleanup(server.Close)
+				return server.URL
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			const limit = int64(4)
+			if got, err := LoadFileOrURLWithLimit(tc.reference(t, []byte("test")), limit); err != nil || string(got) != "test" {
+				t.Fatalf("boundary-sized input: got %q, %v", got, err)
+			}
+
+			_, err := LoadFileOrURLWithLimit(tc.reference(t, []byte("tests")), limit)
+			var tooLarge *InputTooLargeError
+			if !errors.As(err, &tooLarge) {
+				t.Fatalf("oversized input: expected InputTooLargeError, got %v", err)
+			}
+		})
+	}
+}
+
+func TestLoadFileOrURLWithLimitRejectsInvalidLimit(t *testing.T) {
+	if _, err := LoadFileOrURLWithLimit("unused", 0); err == nil {
+		t.Fatal("expected a non-positive limit to fail")
+	}
+}
 
 func TestLoadFile(t *testing.T) {
 	if runtime.GOOS == "windows" {
